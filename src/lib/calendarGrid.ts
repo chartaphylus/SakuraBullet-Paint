@@ -4,7 +4,9 @@ import type {
   CalendarCell,
   CalendarMode,
   CellLevel,
+  DailyShiftConfig,
   DensityConfig,
+  DensityPresetId,
   GridMatrix,
   MissionCommitEntry,
   MonthLabel,
@@ -12,6 +14,94 @@ import type {
 } from '../types/paint';
 
 const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const VALID_THEMES = new Set<ThemeId>(['chisato', 'takina', 'duo']);
+const VALID_MODES = new Set<CalendarMode>(['rolling', 'year']);
+const VALID_PRESETS = new Set<DensityPresetId>(['light', 'standard', 'heavy', 'full', 'custom']);
+const VALID_MESSAGE_STYLES = new Set<DailyShiftConfig['messageStyle']>([
+  'lycoreco',
+  'chisato',
+  'takina',
+  'minimal',
+]);
+
+export function sanitizeThemeId(value: unknown, fallback: ThemeId = 'chisato'): ThemeId {
+  return typeof value === 'string' && VALID_THEMES.has(value as ThemeId)
+    ? (value as ThemeId)
+    : fallback;
+}
+
+export function sanitizeCalendarMode(value: unknown, fallback: CalendarMode = 'rolling'): CalendarMode {
+  return typeof value === 'string' && VALID_MODES.has(value as CalendarMode)
+    ? (value as CalendarMode)
+    : fallback;
+}
+
+export function sanitizeYear(value: unknown, fallback: number = new Date().getFullYear()): number {
+  const num = Number(value);
+  if (Number.isInteger(num) && num >= 2020 && num <= 2035) {
+    return num;
+  }
+  return fallback;
+}
+
+export function sanitizeDensityLevels(value: unknown): [0, number, number, number, number] | undefined {
+  if (!Array.isArray(value) || value.length !== 5) return undefined;
+  const nums = value.map((item, idx) => {
+    if (idx === 0) return 0;
+    const n = Math.round(Number(item));
+    return Number.isFinite(n) ? Math.max(0, Math.min(500, n)) : 0;
+  });
+  return [0, nums[1], nums[2], nums[3], nums[4]];
+}
+
+export function sanitizeDensityConfig(
+  value: unknown,
+  fallback: DensityConfig,
+): DensityConfig {
+  if (!value || typeof value !== 'object') return fallback;
+  const raw = value as { preset?: unknown; levels?: unknown };
+  const levels = sanitizeDensityLevels(raw.levels);
+  if (!levels) return fallback;
+  const preset =
+    typeof raw.preset === 'string' && VALID_PRESETS.has(raw.preset as DensityPresetId)
+      ? (raw.preset as DensityPresetId)
+      : 'custom';
+  return { preset, levels };
+}
+
+export function sanitizeDailyShiftConfig(
+  value: unknown,
+  fallback: DailyShiftConfig,
+): DailyShiftConfig {
+  if (!value || typeof value !== 'object') return fallback;
+  const raw = value as { enabled?: unknown; commitsPerDay?: unknown; messageStyle?: unknown };
+  const commitsPerDay = Math.round(Number(raw.commitsPerDay));
+  return {
+    enabled: Boolean(raw.enabled),
+    commitsPerDay: Number.isFinite(commitsPerDay)
+      ? Math.max(1, Math.min(50, commitsPerDay))
+      : fallback.commitsPerDay,
+    messageStyle:
+      typeof raw.messageStyle === 'string' &&
+      VALID_MESSAGE_STYLES.has(raw.messageStyle as DailyShiftConfig['messageStyle'])
+        ? (raw.messageStyle as DailyShiftConfig['messageStyle'])
+        : fallback.messageStyle,
+  };
+}
+
+export function sanitizeGridMatrix(value: unknown): GridMatrix | undefined {
+  if (!Array.isArray(value) || value.length !== GRID_COLS) return undefined;
+  const next = createEmptyGrid(0);
+  for (let c = 0; c < GRID_COLS; c++) {
+    const col = value[c];
+    if (!Array.isArray(col) || col.length !== GRID_ROWS) return undefined;
+    for (let r = 0; r < GRID_ROWS; r++) {
+      const lv = Math.round(Number(col[r]));
+      next[c][r] = (lv >= 0 && lv <= 4 ? lv : 0) as CellLevel;
+    }
+  }
+  return next;
+}
 
 export function toUtcDateString(d: Date): string {
   const y = d.getUTCFullYear();
@@ -190,10 +280,10 @@ export function encodeShareHash(
   }
   const payload: ShareableState = {
     g: flat,
-    t: theme,
-    m: calendarMode,
-    y: year,
-    d: density.levels,
+    t: sanitizeThemeId(theme),
+    m: sanitizeCalendarMode(calendarMode),
+    y: sanitizeYear(year),
+    d: sanitizeDensityLevels(density.levels) || [0, 2, 5, 8, 12],
   };
   return LZString.compressToEncodedURIComponent(JSON.stringify(payload));
 }
@@ -206,30 +296,34 @@ export function decodeShareHash(hashStr: string): {
   levels?: [0, number, number, number, number];
 } | null {
   try {
+    if (!hashStr || hashStr.length > 8192) return null;
     const clean = hashStr.replace(/^#/, '').replace(/^plan=/, '');
     if (!clean) return null;
     const raw = LZString.decompressFromEncodedURIComponent(clean);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as ShareableState;
-    if (!parsed.g || parsed.g.length !== GRID_COLS * GRID_ROWS) return null;
+    if (!raw || raw.length > 16384) return null;
+    const parsed = JSON.parse(raw) as Partial<ShareableState>;
+    if (!parsed || typeof parsed !== 'object') return null;
+    if (typeof parsed.g !== 'string' || parsed.g.length !== GRID_COLS * GRID_ROWS) return null;
 
     const grid = createEmptyGrid(0);
     for (let c = 0; c < GRID_COLS; c++) {
       for (let r = 0; r < GRID_ROWS; r++) {
         const ch = Number(parsed.g[c * GRID_ROWS + r]);
-        grid[c][r] = (ch >= 0 && ch <= 4 ? ch : 0) as CellLevel;
+        grid[c][r] = (Number.isInteger(ch) && ch >= 0 && ch <= 4 ? ch : 0) as CellLevel;
       }
     }
 
     return {
       grid,
-      theme: parsed.t,
-      calendarMode: parsed.m,
-      year: parsed.y,
-      levels: parsed.d,
+      theme: VALID_THEMES.has(parsed.t as ThemeId) ? parsed.t : undefined,
+      calendarMode: VALID_MODES.has(parsed.m as CalendarMode) ? parsed.m : undefined,
+      year:
+        parsed.y !== undefined && Number.isInteger(Number(parsed.y)) && Number(parsed.y) >= 2020 && Number(parsed.y) <= 2035
+          ? Number(parsed.y)
+          : undefined,
+      levels: sanitizeDensityLevels(parsed.d),
     };
   } catch {
     return null;
   }
 }
-

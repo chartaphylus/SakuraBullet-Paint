@@ -8,6 +8,7 @@ import path from 'node:path';
 const PLAN_PATH = path.resolve(process.cwd(), 'sakura-plan.json');
 const EVENT_NAME = process.env.GITHUB_EVENT_NAME || 'manual';
 const SKIP_PUSH = process.env.SKIP_PUSH === '1';
+const SAFE_DATE_RE = /^\\d{4}-\\d{2}-\\d{2}$/;
 
 const MESSAGES = {
   lycoreco: [
@@ -41,7 +42,11 @@ function git(args, options = {}) {
 
 function getCurrentBranch() {
   try {
-    return git(['rev-parse', '--abbrev-ref', 'HEAD']) || 'main';
+    const branch = git(['rev-parse', '--abbrev-ref', 'HEAD']) || 'main';
+    if (!branch || branch.startsWith('-') || branch.includes('..') || /[\\s\\x00-\\x1f\\x7f]/.test(branch)) {
+      return 'main';
+    }
+    return branch;
   } catch {
     return 'main';
   }
@@ -61,8 +66,9 @@ function runFastImportCommits(branch, authorName, authorEmail, entries, messageS
   const chunks = [];
 
   for (const entry of entries) {
-    const count = Math.max(0, Number(entry.count) || 0);
-    if (!entry.date || count <= 0) continue;
+    if (!entry || typeof entry.date !== 'string' || !SAFE_DATE_RE.test(entry.date)) continue;
+    const count = Math.min(500, Math.max(0, Math.round(Number(entry.count) || 0)));
+    if (count <= 0) continue;
 
     // Noon UTC avoids timezone shifts across UTC-11..UTC+11
     const baseUnix = Math.floor(new Date(\`\${entry.date}T12:00:00Z\`).getTime() / 1000);
@@ -70,7 +76,7 @@ function runFastImportCommits(branch, authorName, authorEmail, entries, messageS
 
     for (let i = 0; i < count; i++) {
       const ts = baseUnix + i;
-      const msg = \`\${pickMessage(messageStyle, globalIdx)} [\${entry.date} #\${i + 1}] [skip ci]\`;
+      const msg = \`\${pickMessage(messageStyle, globalIdx)} [\${entry.date} #\${i + 1}] [skip ci]\`.replace(/[\\r\\n\\0]/g, ' ');
       const msgBytes = Buffer.from(msg, 'utf8');
 
       const header = [
@@ -123,10 +129,10 @@ function main() {
   }
 
   const plan = JSON.parse(fs.readFileSync(PLAN_PATH, 'utf8'));
-  const authorName = (plan.authorName || 'Lycoris Agent').replace(/[<>\\r\\n]/g, '');
-  const authorEmail = (plan.authorEmail || '').trim();
+  const authorName = String(plan.authorName || 'Lycoris Agent').replace(/[<>\\r\\n\\0]/g, '').trim() || 'Lycoris Agent';
+  const authorEmail = String(plan.authorEmail || '').replace(/[<>\\r\\n\\0]/g, '').trim();
 
-  if (!authorEmail) {
+  if (!authorEmail || !authorEmail.includes('@')) {
     throw new Error('authorEmail is required in sakura-plan.json so GitHub counts contributions.');
   }
 
@@ -136,7 +142,6 @@ function main() {
   const branch = getCurrentBranch();
   const style = plan.messageStyle || 'lycoreco';
 
-  // Daily cron mode only appends today's commits if enabled
   if (EVENT_NAME === 'schedule') {
     if (!plan.dailyShift || !plan.dailyShift.enabled) {
       console.log('Daily Café Shift is disabled. Skipping scheduled run.');
@@ -214,9 +219,11 @@ jobs:
 `;
 
 export function createTargetRepoReadme(owner: string, repo: string): string {
-  return `# 🌸 Sakura Bullet Paint Canvas (\`${owner}/${repo}\`)
+  const safeOwner = owner.replace(/[\r\n<>`]/g, '');
+  const safeRepo = repo.replace(/[\r\n<>`]/g, '');
+  return `# 🌸 Sakura Bullet Paint Canvas (\`${safeOwner}/${safeRepo}\`)
 
-Repository khusus milik **${owner}** untuk menyimpan dan mengeksekusi pola kontribusi GitHub dari **Sakura Bullet Paint (Café LycoReco Studio)**.
+Repository khusus milik **${safeOwner}** untuk menyimpan dan mengeksekusi pola kontribusi GitHub dari **Sakura Bullet Paint (Café LycoReco Studio)**.
 
 - **Mode:** Standalone Canvas Repository (bukan fork)
 - **Konfigurasi:** [\`sakura-plan.json\`](./sakura-plan.json)

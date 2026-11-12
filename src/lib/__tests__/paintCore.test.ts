@@ -1,3 +1,4 @@
+import LZString from 'lz-string';
 import { describe, expect, it } from 'vitest';
 import { GRID_COLS, GRID_ROWS, createEmptyGrid } from '../../data/pixelTemplates';
 import {
@@ -11,6 +12,7 @@ import {
   generateBashMissionScript,
   generatePowerShellMissionScript,
 } from '../scriptGenerator';
+import { isRestrictedSourceShortcut } from '../sourceGuard';
 import type { DensityConfig } from '../../types/paint';
 
 describe('Calendar Grid & Date Math', () => {
@@ -115,5 +117,80 @@ describe('Full Year Auto-Fill (15% - 100%), Share Hash & Scripts', () => {
     expect(sh).toContain('chisato@example.com');
     expect(ps1).toContain('git fast-import');
     expect(ps1).toContain('takina@example.com');
+  });
+});
+
+describe('Security Hardening & View-Source Guard', () => {
+  it('sanitizes untrusted theme, mode, year, and density from share hash', () => {
+    const malicious = LZString.compressToEncodedURIComponent(
+      JSON.stringify({
+        g: '2'.repeat(GRID_COLS * GRID_ROWS),
+        t: '__proto__',
+        m: 'invalid-mode',
+        y: 99999,
+        d: [99, -5, 9999, 10, 20],
+      }),
+    );
+
+    const decoded = decodeShareHash(`#plan=${malicious}`);
+    expect(decoded).not.toBeNull();
+    expect(decoded?.theme).toBeUndefined();
+    expect(decoded?.calendarMode).toBeUndefined();
+    expect(decoded?.year).toBeUndefined();
+    expect(decoded?.levels).toEqual([0, 0, 500, 10, 20]);
+  });
+
+  it('strips shell and fast-import injection tokens in generated scripts', () => {
+    const entries = [
+      { date: '2026-05-01', count: 2, level: 1 as const },
+      { date: 'not-a-date\nrm -rf /', count: 99, level: 4 as const },
+    ];
+    const sh = generateBashMissionScript({
+      authorName: 'Chisato $(id) `whoami` <x>\ncommit',
+      authorEmail: 'bad\nemail@example.com',
+      repoName: '../evil/repo',
+      entries,
+      messageStyle: 'chisato',
+    });
+    const ps1 = generatePowerShellMissionScript({
+      authorName: "Takina'; Invoke-WebRequest evil",
+      authorEmail: 'takina@example.com\r\n<inject>',
+      repoName: 'sakura-canvas',
+      entries,
+      messageStyle: 'takina',
+    });
+
+    expect(sh).not.toContain('$(id)');
+    expect(sh).not.toContain('`whoami`');
+    expect(sh).not.toContain('not-a-date');
+    expect(sh).not.toContain('../evil');
+    expect(ps1).not.toContain('not-a-date');
+    expect(ps1).not.toContain('<inject>');
+  });
+
+  it('detects View Source and DevTools shortcuts while preserving editing shortcuts', () => {
+    expect(
+      isRestrictedSourceShortcut({ key: 'u', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }),
+    ).toBe(true);
+    expect(
+      isRestrictedSourceShortcut({ key: 'F12', ctrlKey: false, metaKey: false, shiftKey: false, altKey: false }),
+    ).toBe(true);
+    expect(
+      isRestrictedSourceShortcut({ key: 'I', ctrlKey: true, metaKey: false, shiftKey: true, altKey: false }),
+    ).toBe(true);
+    expect(
+      isRestrictedSourceShortcut({ key: 's', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }),
+    ).toBe(true);
+
+    // Allowed normal shortcuts
+    expect(
+      isRestrictedSourceShortcut({ key: 'z', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }),
+    ).toBe(false);
+    expect(
+      isRestrictedSourceShortcut({ key: 'c', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }),
+    ).toBe(false);
+    expect(
+      isRestrictedSourceShortcut({ key: 'v', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }),
+    ).toBe(false);
   });
 });

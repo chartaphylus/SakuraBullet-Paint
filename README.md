@@ -72,12 +72,19 @@ Project ini merupakan aplikasi frontend statis murni tanpa environment variable 
 
 ---
 
-## 🔐 Privasi & Penggunaan Token GitHub
+## 🔐 Privasi, Keamanan & Proteksi Halaman
 
-- Personal Access Token (PAT) **tidak pernah dikirim ke server pihak ketiga** maupun disimpan ke database. Token hanya disimpan sementara di `sessionStorage` browser dan berkomunikasi langsung ke `https://api.github.com`.
-- Untuk keamanan optimal, gunakan **Fine-grained Personal Access Token** yang dibatasi:
+- **Zero Backend Token Handling:** Personal Access Token (PAT) tidak pernah dikirim ke server pihak ketiga maupun disimpan ke database. Token hanya disimpan sementara di `sessionStorage` browser dan berkomunikasi langsung ke `https://api.github.com` dengan kebijakan `no-referrer`.
+- **Token Scope Minimal:** Gunakan **Fine-grained Personal Access Token** dengan batasan:
   - **Repository access:** *Only select repositories* → pilih **1 repository khusus kanvas** (bukan fork).
   - **Permissions:** `Contents: Read and write` dan `Workflows: Read and write`.
+- **HTTP Security Headers & Hardening (`vercel.json` & Vite):**
+  - Terkonfigurasi **Content-Security-Policy (CSP)**, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Cross-Origin-Opener-Policy: same-origin`, dan `Strict-Transport-Security`.
+  - Validasi ketat input owner/repo/branch, tanggal (`YYYY-MM-DD`), state URL `#plan=...` / `localStorage`, serta sanitasi script `git fast-import`, Bash (`.sh`), dan PowerShell (`.ps1`).
+  - Production build menonaktifkan Source Map (`sourcemap: false`) serta menghapus `console`/`debugger`.
+- **Proteksi View Source & Antarmuka:**
+  - Shortcut `Ctrl+U` / `Cmd+Option+U`, `Ctrl+S`, `F12`, `Ctrl+Shift+I/J/C`, drag gambar, serta klik kanan global pada halaman dinonaktifkan secara aman — sembari tetap mengizinkan *Paste* di kolom input PAT/Email dan *Copy* pada preview script offline maupun log.
+  - *Catatan keamanan web statis:* Jika kamu ingin kode React asli aplikasi ini tidak terbaca orang lain di GitHub, atur repository website ini sebagai **Private** sebelum di-deploy ke Vercel.
 - Jika tidak ingin memasukkan token ke browser, gunakan tab **Export Script (`.ps1` / `.sh`)** dan jalankan secara lokal.
 
 ---
@@ -108,12 +115,14 @@ sakura-bullet-paint/
 │   ├── components/               # UI Kanvas, Density, Hero, Galeri, Deploy & Help
 │   ├── data/                     # Konfigurasi karakter & 3 tema warna
 │   ├── hooks/                    # Hook instalasi PWA
-│   ├── lib/                      # Grid kalender, GitHub API, generator script & template
+│   ├── lib/                      # Grid kalender, GitHub API, generator script & source guard
 │   ├── types/                    # Definisi tipe TypeScript
 │   ├── App.tsx
 │   └── index.css
 ├── index.html
 ├── package.json
+├── vercel.json                   # Security headers (CSP, X-Frame-Options, Referrer-Policy)
+├── vite.config.ts                # Konfigurasi build statis tanpa sourcemap
 ├── LICENSE
 └── README.md
 ```

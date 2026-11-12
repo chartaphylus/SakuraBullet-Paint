@@ -33,7 +33,14 @@ import {
   encodeShareHash,
   invertGrid,
   randomizeGridWithDensity,
+  sanitizeCalendarMode,
+  sanitizeDailyShiftConfig,
+  sanitizeDensityConfig,
+  sanitizeGridMatrix,
+  sanitizeThemeId,
+  sanitizeYear,
 } from './lib/calendarGrid';
+import { installSourceGuard } from './lib/sourceGuard';
 import type {
   BrushTool,
   CalendarMode,
@@ -60,18 +67,25 @@ interface SavedDraft {
 }
 
 function loadInitialState(): SavedDraft {
+  const defaultYear = new Date().getFullYear();
+  const defaultDailyShift: DailyShiftConfig = {
+    enabled: false,
+    commitsPerDay: 2,
+    messageStyle: 'lycoreco',
+  };
+
   if (typeof window !== 'undefined' && window.location.hash) {
     const shared = decodeShareHash(window.location.hash);
     if (shared?.grid) {
       return {
         grid: shared.grid,
-        themeId: shared.theme || 'chisato',
-        calendarMode: shared.calendarMode || 'rolling',
-        selectedYear: shared.year || new Date().getFullYear(),
+        themeId: sanitizeThemeId(shared.theme, 'chisato'),
+        calendarMode: sanitizeCalendarMode(shared.calendarMode, 'rolling'),
+        selectedYear: sanitizeYear(shared.year, defaultYear),
         density: shared.levels
-          ? { preset: 'custom', levels: shared.levels }
+          ? sanitizeDensityConfig({ preset: 'custom', levels: shared.levels }, DEFAULT_DENSITY_CONFIG)
           : DEFAULT_DENSITY_CONFIG,
-        dailyShift: { enabled: false, commitsPerDay: 2, messageStyle: 'lycoreco' },
+        dailyShift: defaultDailyShift,
       };
     }
   }
@@ -80,18 +94,15 @@ function loadInitialState(): SavedDraft {
     const raw = localStorage.getItem(STORAGE_KEY_DRAFT);
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<SavedDraft>;
-      if (Array.isArray(parsed.grid) && parsed.grid.length === GRID_COLS) {
+      const validGrid = sanitizeGridMatrix(parsed?.grid);
+      if (validGrid) {
         return {
-          grid: parsed.grid,
-          themeId: parsed.themeId || 'chisato',
-          calendarMode: parsed.calendarMode || 'rolling',
-          selectedYear: parsed.selectedYear || new Date().getFullYear(),
-          density: parsed.density || DEFAULT_DENSITY_CONFIG,
-          dailyShift: parsed.dailyShift || {
-            enabled: false,
-            commitsPerDay: 2,
-            messageStyle: 'lycoreco',
-          },
+          grid: validGrid,
+          themeId: sanitizeThemeId(parsed.themeId, 'chisato'),
+          calendarMode: sanitizeCalendarMode(parsed.calendarMode, 'rolling'),
+          selectedYear: sanitizeYear(parsed.selectedYear, defaultYear),
+          density: sanitizeDensityConfig(parsed.density, DEFAULT_DENSITY_CONFIG),
+          dailyShift: sanitizeDailyShiftConfig(parsed.dailyShift, defaultDailyShift),
         };
       }
     }
@@ -103,9 +114,9 @@ function loadInitialState(): SavedDraft {
     grid: randomizeGridWithDensity(1, 4),
     themeId: 'chisato',
     calendarMode: 'rolling',
-    selectedYear: new Date().getFullYear(),
+    selectedYear: defaultYear,
     density: DEFAULT_DENSITY_CONFIG,
-    dailyShift: { enabled: false, commitsPerDay: 2, messageStyle: 'lycoreco' },
+    dailyShift: defaultDailyShift,
   };
 }
 
@@ -115,17 +126,17 @@ function loadInitialConnection(): GitHubConnection {
   try {
     const raw = localStorage.getItem(STORAGE_KEY_CONN);
     if (raw) savedNonSecret = JSON.parse(raw) as Partial<GitHubConnection>;
-    sessionToken = sessionStorage.getItem(SESSION_KEY_TOKEN) || '';
+    sessionToken = (sessionStorage.getItem(SESSION_KEY_TOKEN) || '').replace(/[\r\n\0]/g, '');
   } catch {
     // ignore storage errors
   }
   return {
     token: sessionToken,
-    owner: savedNonSecret.owner || '',
-    repo: savedNonSecret.repo || 'sakura-bullet-canvas',
-    branch: savedNonSecret.branch || 'main',
-    authorName: savedNonSecret.authorName || '',
-    authorEmail: savedNonSecret.authorEmail || '',
+    owner: typeof savedNonSecret.owner === 'string' ? savedNonSecret.owner : '',
+    repo: typeof savedNonSecret.repo === 'string' && savedNonSecret.repo ? savedNonSecret.repo : 'sakura-bullet-canvas',
+    branch: typeof savedNonSecret.branch === 'string' && savedNonSecret.branch ? savedNonSecret.branch : 'main',
+    authorName: typeof savedNonSecret.authorName === 'string' ? savedNonSecret.authorName : '',
+    authorEmail: typeof savedNonSecret.authorEmail === 'string' ? savedNonSecret.authorEmail : '',
   };
 }
 
@@ -242,6 +253,13 @@ export function App() {
       return prev.slice(0, -1);
     });
   }, [grid]);
+
+  // View Source / Inspect shortcut & context menu protection (preserves inputs & explicit copy zones)
+  useEffect(() => {
+    return installSourceGuard((reason) => {
+      setReactionText(`🛡️ ${reason}`);
+    });
+  }, []);
 
   // Keyboard shortcuts Ctrl+Z / Ctrl+Y
   useEffect(() => {

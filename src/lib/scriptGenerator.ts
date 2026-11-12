@@ -1,6 +1,43 @@
 import { THEMED_COMMIT_MESSAGES } from '../data/themes';
 import type { DailyShiftConfig, MissionCommitEntry } from '../types/paint';
 
+const SAFE_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function sanitizeIdentity(value: string, fallback: string): string {
+  const cleaned = (value || '')
+    .replace(/[<>\r\n\0$`"\\]/g, '')
+    .trim();
+  return cleaned || fallback;
+}
+
+function sanitizeRepoDir(repoName: string): string {
+  const cleaned = (repoName || 'sakura-bullet-canvas')
+    .replace(/[^a-zA-Z0-9._-]/g, '-')
+    .replace(/^-+/, '');
+  if (!cleaned || cleaned === '.' || cleaned === '..') {
+    return 'sakura-bullet-canvas';
+  }
+  return cleaned;
+}
+
+function sanitizeEntries(entries: MissionCommitEntry[]): Array<{ date: string; count: number }> {
+  return entries
+    .filter((e) => SAFE_DATE_RE.test(e.date))
+    .map((e) => ({
+      date: e.date,
+      count: Math.min(500, Math.max(0, Math.round(Number(e.count) || 0))),
+    }))
+    .filter((e) => e.count > 0);
+}
+
+function escapeBashSingleQuoted(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function escapePowerShellSingleQuoted(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
 export function generateBashMissionScript(params: {
   authorName: string;
   authorEmail: string;
@@ -10,25 +47,27 @@ export function generateBashMissionScript(params: {
 }): string {
   const { authorName, authorEmail, repoName, entries, messageStyle } = params;
   const messages = THEMED_COMMIT_MESSAGES[messageStyle] || THEMED_COMMIT_MESSAGES.lycoreco;
-  const safeName = (authorName || 'Lycoris Agent').replace(/"/g, '\\"');
-  const safeEmail = (authorEmail || 'your-email@users.noreply.github.com').replace(/"/g, '\\"');
-  const safeRepo = (repoName || 'sakura-bullet-canvas').replace(/[^a-zA-Z0-9._-]/g, '-');
+  const safeName = sanitizeIdentity(authorName, 'Lycoris Agent').replace(/'/g, '');
+  const safeEmail = sanitizeIdentity(authorEmail, 'your-email@users.noreply.github.com').replace(/'/g, '');
+  const safeRepo = sanitizeRepoDir(repoName);
+  const safeEntries = sanitizeEntries(entries);
 
   const lines: string[] = [
     '#!/usr/bin/env bash',
     'set -euo pipefail',
     '',
     `# 🌸 Sakura Bullet Paint — Café LycoReco Offline Mission Script`,
-    `# Target entries: ${entries.length} days`,
+    `# Target entries: ${safeEntries.length} days`,
     '',
-    `mkdir -p "${safeRepo}"`,
-    `cd "${safeRepo}"`,
+    `REPO_DIR=${escapeBashSingleQuoted(safeRepo)}`,
+    `mkdir -p "$REPO_DIR"`,
+    `cd "$REPO_DIR"`,
     'if [ ! -d .git ]; then',
     '  git init -b main',
     'fi',
     '',
-    `git config user.name "${safeName}"`,
-    `git config user.email "${safeEmail}"`,
+    `git config user.name ${escapeBashSingleQuoted(safeName)}`,
+    `git config user.email ${escapeBashSingleQuoted(safeEmail)}`,
     '',
     'echo "# 🌸 Sakura Bullet Paint Canvas" > README.md',
     'git add README.md',
@@ -41,15 +80,14 @@ export function generateBashMissionScript(params: {
   let markId = 1;
   let globalIdx = 0;
 
-  for (const entry of entries) {
-    const count = Math.max(0, entry.count);
-    if (!entry.date || count <= 0) continue;
+  for (const entry of safeEntries) {
     const baseUnix = Math.floor(new Date(`${entry.date}T12:00:00Z`).getTime() / 1000);
-    for (let i = 0; i < count; i++) {
+    if (!Number.isFinite(baseUnix)) continue;
+    for (let i = 0; i < entry.count; i++) {
       const ts = baseUnix + i;
-      const msg = `${messages[globalIdx % messages.length]} [${entry.date} #${i + 1}]`;
+      const msg = `${messages[globalIdx % messages.length]} [${entry.date} #${i + 1}]`.replace(/[\r\n\0]/g, ' ');
       const msgBytes = new TextEncoder().encode(msg).length;
-      lines.push(`commit refs/heads/main`);
+      lines.push('commit refs/heads/main');
       lines.push(`mark :${markId}`);
       lines.push(`author ${safeName} <${safeEmail}> ${ts} +0000`);
       lines.push(`committer ${safeName} <${safeEmail}> ${ts} +0000`);
@@ -80,18 +118,19 @@ export function generatePowerShellMissionScript(params: {
 }): string {
   const { authorName, authorEmail, repoName, entries, messageStyle } = params;
   const messages = THEMED_COMMIT_MESSAGES[messageStyle] || THEMED_COMMIT_MESSAGES.lycoreco;
-  const safeName = (authorName || 'Lycoris Agent').replace(/'/g, "''");
-  const safeEmail = (authorEmail || 'your-email@users.noreply.github.com').replace(/'/g, "''");
-  const safeRepo = (repoName || 'sakura-bullet-canvas').replace(/[^a-zA-Z0-9._-]/g, '-');
+  const safeName = sanitizeIdentity(authorName, 'Lycoris Agent');
+  const safeEmail = sanitizeIdentity(authorEmail, 'your-email@users.noreply.github.com');
+  const safeRepo = sanitizeRepoDir(repoName);
+  const safeEntries = sanitizeEntries(entries);
 
   const compactPlan = JSON.stringify(
-    entries.map((e) => ({ d: e.date, c: e.count })),
+    safeEntries.map((e) => ({ d: e.date, c: e.count })),
   );
 
   return `# 🌸 Sakura Bullet Paint — PowerShell Offline Mission Script
 $ErrorActionPreference = 'Stop'
 
-$RepoDir = '${safeRepo}'
+$RepoDir = ${escapePowerShellSingleQuoted(safeRepo)}
 if (-not (Test-Path $RepoDir)) { New-Item -ItemType Directory -Path $RepoDir | Out-Null }
 Set-Location $RepoDir
 
@@ -99,8 +138,8 @@ if (-not (Test-Path '.git')) {
   git init -b main | Out-Null
 }
 
-$AuthorName = '${safeName}'
-$AuthorEmail = '${safeEmail}'
+$AuthorName = ${escapePowerShellSingleQuoted(safeName)}
+$AuthorEmail = ${escapePowerShellSingleQuoted(safeEmail)}
 git config user.name $AuthorName
 git config user.email $AuthorEmail
 
@@ -110,8 +149,8 @@ if (-not (Test-Path 'README.md')) {
   git commit -m '🌸 Initialize Café LycoReco Canvas' | Out-Null
 }
 
-$Plan = '${compactPlan}' | ConvertFrom-Json
-$Messages = @(${messages.map((m) => `'${m.replace(/'/g, "''")}'`).join(', ')})
+$Plan = ${escapePowerShellSingleQuoted(compactPlan)} | ConvertFrom-Json
+$Messages = @(${messages.map((m) => escapePowerShellSingleQuoted(m)).join(', ')})
 
 $TempFile = [System.IO.Path]::GetTempFileName()
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
@@ -157,4 +196,3 @@ Write-Host "✅ Mission complete! Generated $GlobalIdx commits in '$RepoDir'." -
 Write-Host "👉 Next step: git remote add origin https://github.com/<USERNAME>/<REPO>.git && git push -u origin main" -ForegroundColor Cyan
 `;
 }
-

@@ -361,7 +361,7 @@ export function MissionDeployPanel({
             <a
               href="https://github.com/settings/personal-access-tokens/new"
               target="_blank"
-              rel="noreferrer"
+              rel="noopener noreferrer"
               className={`inline-flex items-center gap-1 font-bold hover:underline ${theme.secondaryAccentText}`}
             >
               Buat Token PAT di GitHub
@@ -476,7 +476,7 @@ export function MissionDeployPanel({
                 <a
                   href="https://github.com/settings/personal-access-tokens/new"
                   target="_blank"
-                  rel="noreferrer"
+                  rel="noopener noreferrer"
                   className={`inline-flex items-center gap-1 font-semibold hover:underline ${theme.secondaryAccentText}`}
                 >
                   Buat PAT
@@ -782,7 +782,10 @@ export function MissionDeployPanel({
               <span>{scriptFormat === 'ps1' ? 'sakura-mission.ps1' : 'sakura-mission.sh'}</span>
               <span>{summary.totalCommits.toLocaleString()} commits</span>
             </div>
-            <pre className="max-h-48 overflow-auto p-3.5 font-mono text-[11px] leading-relaxed text-slate-200">
+            <pre
+              data-allow-context="true"
+              className="max-h-48 overflow-auto p-3.5 font-mono text-[11px] leading-relaxed text-slate-200"
+            >
               {scriptContent}
             </pre>
           </div>
@@ -812,7 +815,7 @@ export function MissionDeployPanel({
                   <a
                     href={resultLinks.actionsUrl}
                     target="_blank"
-                    rel="noreferrer"
+                    rel="noopener noreferrer"
                     className="inline-flex items-center gap-1 rounded-lg bg-rose-600 px-2.5 py-1 text-xs font-bold text-white hover:bg-rose-500"
                   >
                     Buka GitHub Actions
@@ -823,7 +826,7 @@ export function MissionDeployPanel({
                   <a
                     href={resultLinks.profileUrl}
                     target="_blank"
-                    rel="noreferrer"
+                    rel="noopener noreferrer"
                     className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1 text-xs font-bold text-slate-100 hover:bg-slate-700"
                   >
                     Profil GitHub
@@ -834,7 +837,10 @@ export function MissionDeployPanel({
             )}
           </div>
 
-          <div className="max-h-36 space-y-1 overflow-y-auto p-3 font-mono text-[11px] leading-relaxed">
+          <div
+            data-allow-context="true"
+            className="max-h-36 space-y-1 overflow-y-auto p-3 font-mono text-[11px] leading-relaxed"
+          >
             {logs.map((line, i) => (
               <div key={i}>{line}</div>
             ))}
