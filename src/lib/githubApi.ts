@@ -83,6 +83,16 @@ function toBase64Utf8(text: string): string {
   return btoa(binary);
 }
 
+function fromBase64Utf8(base64: string): string {
+  const clean = base64.replace(/\s+/g, '');
+  const binary = atob(clean);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return new TextDecoder().decode(bytes);
+}
+
 async function ghFetch<T>(
   path: string,
   rawToken: string,
@@ -260,6 +270,39 @@ export async function createStandaloneRepository(
   };
 }
 
+interface ExistingFileInfo {
+  sha: string;
+  content?: string;
+}
+
+async function getExistingFileInfo(
+  token: string,
+  owner: string,
+  repo: string,
+  branch: string,
+  filePath: string,
+): Promise<ExistingFileInfo | undefined> {
+  try {
+    const res = await ghFetch<{ sha: string; content?: string; encoding?: string }>(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${encodeRepoPath(filePath)}?ref=${encodeURIComponent(branch)}`,
+      token,
+    );
+    let content: string | undefined;
+    if (typeof res.content === 'string' && (!res.encoding || res.encoding === 'base64')) {
+      try {
+        content = fromBase64Utf8(res.content);
+      } catch {
+        content = undefined;
+      }
+    }
+    return { sha: res.sha, content };
+  } catch (err) {
+    const status = (err as { status?: number }).status;
+    if (status === 404) return undefined;
+    throw err;
+  }
+}
+
 async function getExistingFileSha(
   token: string,
   owner: string,
@@ -267,17 +310,8 @@ async function getExistingFileSha(
   branch: string,
   filePath: string,
 ): Promise<string | undefined> {
-  try {
-    const res = await ghFetch<{ sha: string }>(
-      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${encodeRepoPath(filePath)}?ref=${encodeURIComponent(branch)}`,
-      token,
-    );
-    return res.sha;
-  } catch (err) {
-    const status = (err as { status?: number }).status;
-    if (status === 404) return undefined;
-    throw err;
-  }
+  const info = await getExistingFileInfo(token, owner, repo, branch, filePath);
+  return info?.sha;
 }
 
 export async function upsertRepoFile(
@@ -288,12 +322,13 @@ export async function upsertRepoFile(
   filePath: string,
   content: string,
   message: string,
-): Promise<void> {
+  knownSha?: string,
+): Promise<string | undefined> {
   const safeOwner = assertSafeOwner(owner);
   const safeRepo = assertSafeRepo(repo);
   const safeBranch = assertSafeBranch(branch);
-  const sha = await getExistingFileSha(token, safeOwner, safeRepo, safeBranch, filePath);
-  await ghFetch(
+  const sha = knownSha ?? (await getExistingFileSha(token, safeOwner, safeRepo, safeBranch, filePath));
+  const res = await ghFetch<{ commit?: { sha?: string } }>(
     `/repos/${encodeURIComponent(safeOwner)}/${encodeURIComponent(safeRepo)}/contents/${encodeRepoPath(filePath)}`,
     token,
     {
@@ -306,13 +341,14 @@ export async function upsertRepoFile(
       }),
     },
   );
+  return res?.commit?.sha;
 }
 
 export async function deployPlanViaActions(
   conn: GitHubConnection,
   plan: SakuraPlanPayload,
   onLog: (msg: string) => void,
-): Promise<{ actionsUrl: string; profileUrl: string }> {
+): Promise<{ actionsUrl: string; profileUrl: string; commitSha?: string }> {
   const token = sanitizeToken(conn.token);
   const owner = assertSafeOwner(conn.owner);
   const repo = assertSafeRepo(conn.repo);
@@ -342,8 +378,11 @@ export async function deployPlanViaActions(
 
   const branch = assertSafeBranch(conn.branch || status.defaultBranch || 'main');
 
-  const runnerSha = await getExistingFileSha(token, owner, repo, branch, 'scripts/execute-mission.mjs');
-  if (!runnerSha) {
+  const runnerInfo = await getExistingFileInfo(token, owner, repo, branch, 'scripts/execute-mission.mjs');
+  const expectedRunner = MISSION_RUNNER_SCRIPT.replace(/\r\n/g, '\n').trim();
+  const currentRunner = runnerInfo?.content?.replace(/\r\n/g, '\n').trim();
+
+  if (!runnerInfo) {
     onLog('⚙️ Mengunggah scripts/execute-mission.mjs...');
     await upsertRepoFile(
       token,
@@ -353,6 +392,18 @@ export async function deployPlanViaActions(
       'scripts/execute-mission.mjs',
       MISSION_RUNNER_SCRIPT,
       'feat: add Sakura Bullet mission runner [skip ci]',
+    );
+  } else if (currentRunner !== expectedRunner) {
+    onLog('⚙️ Memperbarui scripts/execute-mission.mjs (batched push)...');
+    await upsertRepoFile(
+      token,
+      owner,
+      repo,
+      branch,
+      'scripts/execute-mission.mjs',
+      MISSION_RUNNER_SCRIPT,
+      'fix: update Sakura Bullet mission runner with batched push [skip ci]',
+      runnerInfo.sha,
     );
   }
 
@@ -391,7 +442,7 @@ export async function deployPlanViaActions(
   }
 
   onLog(`🎯 Mengirim sakura-plan.json (mode: ${plan.mode}, ${plan.commits.length} hari aktif)...`);
-  await upsertRepoFile(
+  const commitSha = await upsertRepoFile(
     token,
     owner,
     repo,
@@ -403,11 +454,150 @@ export async function deployPlanViaActions(
       : `🌸 Café LycoReco: Deploy ${plan.theme} paint mission (${plan.commits.length} days)`,
   );
 
-  onLog('🚀 sakura-plan.json berhasil di-commit! GitHub Actions otomatis mengeksekusi sekarang.');
+  onLog('🚀 sakura-plan.json berhasil di-commit! Memantau status GitHub Actions...');
   return {
     actionsUrl: `https://github.com/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions`,
     profileUrl: `https://github.com/${encodeURIComponent(owner)}`,
+    commitSha,
   };
+}
+
+export interface WorkflowRunSnapshot {
+  id: number;
+  runNumber: number;
+  status: string;
+  conclusion: string | null;
+  htmlUrl: string;
+  createdAt: string;
+  updatedAt: string;
+  runStartedAt?: string;
+}
+
+export type WorkflowPollResult =
+  | { state: 'success'; run: WorkflowRunSnapshot; durationSec: number }
+  | { state: 'failure'; run: WorkflowRunSnapshot; durationSec: number }
+  | { state: 'timeout'; run?: WorkflowRunSnapshot }
+  | { state: 'unavailable'; reason: 'permission' | 'error'; message: string };
+
+function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<boolean> {
+  if (signal?.aborted) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve(true);
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve(false);
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+export async function pollWorkflowRunCompletion(
+  conn: GitHubConnection,
+  commitSha: string | undefined,
+  onStatusUpdate: (run: WorkflowRunSnapshot) => void,
+  signal?: AbortSignal,
+): Promise<WorkflowPollResult> {
+  const token = sanitizeToken(conn.token);
+  const owner = assertSafeOwner(conn.owner);
+  const repo = assertSafeRepo(conn.repo);
+  const fallbackUrl = `https://github.com/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions`;
+  const startedAtMs = Date.now();
+
+  let lastKey = '';
+  let lastMatchedRun: WorkflowRunSnapshot | undefined;
+  const maxAttempts = 85; // ~5 minutes max at 3.5s interval
+
+  // Wait briefly for GitHub Actions to enqueue the push workflow
+  if (!(await sleepWithAbort(2000, signal))) {
+    return { state: 'timeout' };
+  }
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    if (signal?.aborted) {
+      return { state: 'timeout', run: lastMatchedRun };
+    }
+
+    try {
+      const query = commitSha
+        ? `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs?head_sha=${encodeURIComponent(commitSha)}&per_page=5`
+        : `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs?event=push&per_page=10`;
+
+      const data = await ghFetch<{
+        workflow_runs?: Array<{
+          id: number;
+          run_number: number;
+          status: string;
+          conclusion: string | null;
+          html_url?: string;
+          head_sha?: string;
+          path?: string;
+          created_at: string;
+          updated_at: string;
+          run_started_at?: string;
+        }>;
+      }>(query, token);
+
+      const runs = Array.isArray(data.workflow_runs) ? data.workflow_runs : [];
+      const matchedRaw =
+        runs.find((r) => (commitSha ? r.head_sha === commitSha : true) && (!r.path || r.path.endsWith('sakura-bullet-paint.yml'))) ||
+        runs.find((r) => new Date(r.created_at).getTime() >= startedAtMs - 15000);
+
+      if (matchedRaw) {
+        const snapshot: WorkflowRunSnapshot = {
+          id: matchedRaw.id,
+          runNumber: matchedRaw.run_number,
+          status: matchedRaw.status,
+          conclusion: matchedRaw.conclusion,
+          htmlUrl: safeGitHubUrl(matchedRaw.html_url, fallbackUrl),
+          createdAt: matchedRaw.created_at,
+          updatedAt: matchedRaw.updated_at,
+          runStartedAt: matchedRaw.run_started_at,
+        };
+        lastMatchedRun = snapshot;
+
+        const key = `${snapshot.id}:${snapshot.status}:${snapshot.conclusion ?? ''}`;
+        if (key !== lastKey) {
+          lastKey = key;
+          onStatusUpdate(snapshot);
+        }
+
+        if (snapshot.status === 'completed') {
+          const startMs = new Date(snapshot.runStartedAt || snapshot.createdAt).getTime();
+          const endMs = new Date(snapshot.updatedAt).getTime();
+          const durationSec = Math.max(1, Math.round((endMs - startMs) / 1000));
+          if (snapshot.conclusion === 'success') {
+            return { state: 'success', run: snapshot, durationSec };
+          }
+          return { state: 'failure', run: snapshot, durationSec };
+        }
+      }
+    } catch (err) {
+      const status = (err as { status?: number }).status;
+      if (status === 403 || status === 404) {
+        return {
+          state: 'unavailable',
+          reason: 'permission',
+          message: 'Tidak bisa memantau status Actions otomatis (repo private tanpa izin Actions: Read di PAT).',
+        };
+      }
+      if (attempt >= 3 && !lastMatchedRun) {
+        return {
+          state: 'unavailable',
+          reason: 'error',
+          message: err instanceof Error ? err.message : 'Gagal membaca status GitHub Actions.',
+        };
+      }
+    }
+
+    if (!(await sleepWithAbort(3500, signal))) {
+      return { state: 'timeout', run: lastMatchedRun };
+    }
+  }
+
+  return { state: 'timeout', run: lastMatchedRun };
 }
 
 export async function runDirectBrowserCommits(

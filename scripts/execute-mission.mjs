@@ -7,6 +7,7 @@ const PLAN_PATH = path.resolve(process.cwd(), 'sakura-plan.json');
 const EVENT_NAME = process.env.GITHUB_EVENT_NAME || 'manual';
 const SKIP_PUSH = process.env.SKIP_PUSH === '1';
 const SAFE_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const PUSH_BATCH_SIZE = 400;
 
 const MESSAGES = {
   lycoreco: [
@@ -35,12 +36,19 @@ const MESSAGES = {
 };
 
 function git(args, options = {}) {
-  return execFileSync('git', args, { encoding: 'utf8', ...options }).trim();
+  return execFileSync('git', args, {
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+    ...options,
+  }).trim();
 }
 
 function getCurrentBranch() {
   try {
-    const branch = git(['rev-parse', '--abbrev-ref', 'HEAD']) || 'main';
+    let branch = git(['rev-parse', '--abbrev-ref', 'HEAD']) || '';
+    if (!branch || branch === 'HEAD') {
+      branch = process.env.GITHUB_REF_NAME || 'main';
+    }
     if (!branch || branch.startsWith('-') || branch.includes('..') || /[\s\x00-\x1f\x7f]/.test(branch)) {
       return 'main';
     }
@@ -57,6 +65,7 @@ function pickMessage(style, idx) {
 
 function runFastImportCommits(branch, authorName, authorEmail, entries, messageStyle) {
   const hasHead = spawnSync('git', ['rev-parse', '--verify', 'HEAD'], { stdio: 'ignore' }).status === 0;
+  const oldHead = hasHead ? git(['rev-parse', 'HEAD']) : null;
   const refName = `refs/heads/${branch}`;
 
   let markId = 1;
@@ -102,7 +111,7 @@ function runFastImportCommits(branch, authorName, authorEmail, entries, messageS
 
   if (globalIdx === 0) {
     console.log('No commits requested in plan.');
-    return 0;
+    return { total: 0, oldHead };
   }
 
   const input = Buffer.concat(chunks);
@@ -117,7 +126,35 @@ function runFastImportCommits(branch, authorName, authorEmail, entries, messageS
 
   git(['reset', '--hard', refName]);
   console.log(`Generated ${globalIdx} commits on ${branch} via git fast-import.`);
-  return globalIdx;
+  return { total: globalIdx, oldHead };
+}
+
+function pushBranchInBatches(branch, oldHead) {
+  const refName = `refs/heads/${branch}`;
+  const range = oldHead ? `${oldHead}..${refName}` : refName;
+  const rawList = git(['rev-list', '--reverse', range]);
+  const shas = rawList ? rawList.split(/\r?\n/).filter(Boolean) : [];
+
+  if (shas.length <= PUSH_BATCH_SIZE) {
+    git(['push', 'origin', branch]);
+    console.log(`Pushed ${shas.length} commits to origin/${branch}.`);
+    return;
+  }
+
+  const totalBatches = Math.ceil(shas.length / PUSH_BATCH_SIZE);
+  let batchNum = 0;
+
+  for (let i = PUSH_BATCH_SIZE - 1; i < shas.length; i += PUSH_BATCH_SIZE) {
+    batchNum += 1;
+    git(['push', 'origin', `${shas[i]}:${refName}`]);
+    console.log(`Pushed batch ${batchNum}/${totalBatches} (${i + 1}/${shas.length} commits)...`);
+  }
+
+  if (shas.length % PUSH_BATCH_SIZE !== 0) {
+    batchNum += 1;
+    git(['push', 'origin', branch]);
+    console.log(`Pushed batch ${batchNum}/${totalBatches} (${shas.length}/${shas.length} commits).`);
+  }
 }
 
 function main() {
@@ -147,9 +184,9 @@ function main() {
     }
     const today = new Date().toISOString().slice(0, 10);
     const count = Math.max(1, Math.min(50, Number(plan.dailyShift.commitsPerDay) || 1));
-    const total = runFastImportCommits(branch, authorName, authorEmail, [{ date: today, count }], style);
+    const { total, oldHead } = runFastImportCommits(branch, authorName, authorEmail, [{ date: today, count }], style);
     if (total > 0 && !SKIP_PUSH) {
-      git(['push', 'origin', branch]);
+      pushBranchInBatches(branch, oldHead);
     }
     return;
   }
@@ -172,9 +209,9 @@ function main() {
 
   if (plan.mode === 'paint') {
     const entries = Array.isArray(plan.commits) ? plan.commits : [];
-    const total = runFastImportCommits(branch, authorName, authorEmail, entries, style);
+    const { total, oldHead } = runFastImportCommits(branch, authorName, authorEmail, entries, style);
     if (total > 0 && !SKIP_PUSH) {
-      git(['push', 'origin', branch]);
+      pushBranchInBatches(branch, oldHead);
     }
     return;
   }

@@ -8,6 +8,7 @@ import {
   encodeShareHash,
   randomizeGridWithDensity,
 } from '../calendarGrid';
+import { MISSION_RUNNER_SCRIPT } from '../repoTemplateFiles';
 import {
   generateBashMissionScript,
   generatePowerShellMissionScript,
@@ -192,5 +193,11 @@ describe('Security Hardening & View-Source Guard', () => {
     expect(
       isRestrictedSourceShortcut({ key: 'v', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }),
     ).toBe(false);
+  });
+
+  it('configures MISSION_RUNNER_SCRIPT for batched pushes under GitHub limits', () => {
+    expect(MISSION_RUNNER_SCRIPT).toContain('PUSH_BATCH_SIZE = 400');
+    expect(MISSION_RUNNER_SCRIPT).toContain('function pushBranchInBatches(branch, oldHead)');
+    expect(MISSION_RUNNER_SCRIPT).toContain('pushBranchInBatches(branch, oldHead)');
   });
 });

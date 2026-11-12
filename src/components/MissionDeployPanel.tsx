@@ -1,6 +1,7 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  Bell,
   CheckCircle2,
   Copy,
   Cpu,
@@ -31,6 +32,7 @@ import {
   checkRepository,
   createStandaloneRepository,
   deployPlanViaActions,
+  pollWorkflowRunCompletion,
   runDirectBrowserCommits,
   verifyGitHubToken,
   type RepoStatusInfo,
@@ -56,10 +58,39 @@ interface MissionDeployPanelProps {
   onClearToken: () => void;
   summary: MissionSummary;
   dailyShift: DailyShiftConfig;
-  onDeploySuccess?: (msg: string) => void;
+  onDeploySuccess?: (msg: string, variant?: 'info' | 'success' | 'error') => void;
 }
 
 type DeployTab = 'actions' | 'direct' | 'offline';
+
+type MissionNotificationState =
+  | {
+      status: 'tracking';
+      mode: 'paint' | 'reset';
+      runNumber?: number;
+      runStatus?: string;
+      runUrl?: string;
+    }
+  | {
+      status: 'success';
+      mode: 'paint' | 'reset' | 'direct';
+      title: string;
+      detail: string;
+      runUrl?: string;
+      profileUrl?: string;
+    }
+  | {
+      status: 'failure';
+      title: string;
+      detail: string;
+      runUrl?: string;
+    }
+  | {
+      status: 'info';
+      title: string;
+      detail: string;
+      runUrl?: string;
+    };
 
 export function MissionDeployPanel({
   theme,
@@ -80,12 +111,59 @@ export function MissionDeployPanel({
   const [logs, setLogs] = useState<string[]>([]);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [resultLinks, setResultLinks] = useState<{ actionsUrl?: string; profileUrl?: string } | null>(null);
+  const [missionBanner, setMissionBanner] = useState<MissionNotificationState | null>(null);
+  const [notifPerm, setNotifPerm] = useState<NotificationPermission | 'unsupported'>(() =>
+    typeof window !== 'undefined' && 'Notification' in window ? Notification.permission : 'unsupported',
+  );
   const [confirmReset, setConfirmReset] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number; date: string } | null>(null);
   const [scriptFormat, setScriptFormat] = useState<'ps1' | 'sh'>('ps1');
   const [copiedScript, setCopiedScript] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
+  const pollAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    return () => {
+      pollAbortRef.current?.abort();
+    };
+  }, []);
+
+  const sendDesktopNotification = (title: string, body: string, targetUrl?: string) => {
+    if (typeof window === 'undefined' || !('Notification' in window)) return;
+    if (Notification.permission !== 'granted') return;
+    try {
+      const notif = new Notification(title, {
+        body,
+        icon: '/icons/icon-192.png',
+        tag: 'sakura-bullet-mission',
+      });
+      if (targetUrl && targetUrl.startsWith('https://github.com/')) {
+        notif.onclick = () => {
+          window.open(targetUrl, '_blank', 'noopener,noreferrer');
+          notif.close();
+        };
+      }
+    } catch {
+      // Ignore environments restricting new Notification()
+    }
+  };
+
+  const requestDesktopNotifications = async () => {
+    if (typeof window === 'undefined' || !('Notification' in window)) return;
+    try {
+      const result = await Notification.requestPermission();
+      setNotifPerm(result);
+      if (result === 'granted') {
+        sendDesktopNotification(
+          'Sakura Bullet Paint',
+          'Notifikasi desktop aktif! Kamu akan diberi tahu saat GitHub Actions selesai.',
+        );
+      }
+    } catch {
+      // Ignore permission rejection
+    }
+  };
 
   const appendLog = (msg: string) => {
     setLogs((prev) => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`]);
@@ -205,21 +283,127 @@ export function MissionDeployPanel({
     return true;
   };
 
+  const startWorkflowTracking = async (
+    mode: 'paint' | 'reset',
+    deployRes: { actionsUrl: string; profileUrl: string; commitSha?: string },
+  ) => {
+    pollAbortRef.current?.abort();
+    const controller = new AbortController();
+    pollAbortRef.current = controller;
+
+    setMissionBanner({
+      status: 'tracking',
+      mode,
+      runStatus: 'queued',
+      runUrl: deployRes.actionsUrl,
+    });
+    onDeploySuccess?.(
+      mode === 'reset'
+        ? 'Permintaan reset dikirim! Memantau GitHub Actions hingga selesai...'
+        : `Misi dikirim ke ${connection.owner}/${connection.repo}! Memantau status workflow...`,
+      'info',
+    );
+
+    const result = await pollWorkflowRunCompletion(
+      connection,
+      deployRes.commitSha,
+      (run) => {
+        if (controller.signal.aborted) return;
+        setMissionBanner({
+          status: 'tracking',
+          mode,
+          runNumber: run.runNumber,
+          runStatus: run.status,
+          runUrl: run.htmlUrl,
+        });
+        if (run.status === 'queued' || run.status === 'waiting') {
+          appendLog(`⏳ Workflow #${run.runNumber} masuk antrean GitHub Actions...`);
+        } else if (run.status === 'in_progress') {
+          appendLog(`⚙️ Workflow #${run.runNumber} sedang mengeksekusi batched commit push...`);
+        }
+      },
+      controller.signal,
+    );
+
+    if (controller.signal.aborted) return;
+
+    if (result.state === 'success') {
+      const title =
+        mode === 'reset'
+          ? `Reset Repo Berhasil! (Run #${result.run.runNumber}, ${result.durationSec}s)`
+          : `Misi Berhasil Dieksekusi! (Run #${result.run.runNumber}, ${result.durationSec}s)`;
+      const detail =
+        mode === 'reset'
+          ? 'Histori kanvas repo telah dibersihkan ke 1 commit awal. Kamu bisa lanjut Execute Mission sekarang.'
+          : `${summary.totalCommits.toLocaleString()} commit berhasil di-push per batch ke ${connection.owner}/${connection.repo}. Refresh profil GitHub dalam 1–2 menit.`;
+      appendLog(`✅ ${title}`);
+      setMissionBanner({
+        status: 'success',
+        mode,
+        title,
+        detail,
+        runUrl: result.run.htmlUrl,
+        profileUrl: deployRes.profileUrl,
+      });
+      onDeploySuccess?.(`✅ ${title}`, 'success');
+      sendDesktopNotification(`🌸 ${title}`, detail, deployRes.profileUrl);
+      return;
+    }
+
+    if (result.state === 'failure') {
+      const title = `Workflow #${result.run.runNumber} gagal (${result.run.conclusion || 'error'})`;
+      const detail = 'Buka detail GitHub Actions untuk melihat log error workflow.';
+      appendLog(`❌ ${title}`);
+      setMissionBanner({
+        status: 'failure',
+        title,
+        detail,
+        runUrl: result.run.htmlUrl,
+      });
+      onDeploySuccess?.(`❌ ${title}`, 'error');
+      sendDesktopNotification(`⚠️ ${title}`, detail, result.run.htmlUrl);
+      return;
+    }
+
+    if (result.state === 'unavailable') {
+      appendLog(`ℹ️ ${result.message}`);
+      setMissionBanner({
+        status: 'info',
+        title: 'Commit Terkirim ke GitHub!',
+        detail: `${result.message} Cek tab GitHub Actions untuk melihat status selesai.`,
+        runUrl: deployRes.actionsUrl,
+      });
+      return;
+    }
+
+    setMissionBanner({
+      status: 'info',
+      title: 'Workflow Masih Berjalan / Belum Terdeteksi Selesai',
+      detail: 'Cek langsung tab GitHub Actions pada tombol di bawah untuk melihat progres terbaru.',
+      runUrl: result.run?.htmlUrl || deployRes.actionsUrl,
+    });
+  };
+
   const handleExecuteActions = async () => {
     if (!validateReady(true)) return;
+    pollAbortRef.current?.abort();
     setIsBusy(true);
     setErrorMsg(null);
     setResultLinks(null);
+    setMissionBanner(null);
     setLogs([]);
+    let deployRes: { actionsUrl: string; profileUrl: string; commitSha?: string } | null = null;
     try {
       const plan = buildPlanPayload('paint');
-      const res = await deployPlanViaActions(connection, plan, appendLog);
-      setResultLinks(res);
-      onDeploySuccess?.(`Misi berhasil dikirim ke ${connection.owner}/${connection.repo}!`);
+      deployRes = await deployPlanViaActions(connection, plan, appendLog);
+      setResultLinks(deployRes);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Gagal deploy misi ke GitHub Actions.');
     } finally {
       setIsBusy(false);
+    }
+    if (deployRes) {
+      void startWorkflowTracking('paint', deployRes);
     }
   };
 
@@ -229,28 +413,35 @@ export function MissionDeployPanel({
       return;
     }
     if (!validateReady(false)) return;
+    pollAbortRef.current?.abort();
     setConfirmReset(false);
     setIsBusy(true);
     setErrorMsg(null);
     setResultLinks(null);
+    setMissionBanner(null);
     setLogs([]);
+    let deployRes: { actionsUrl: string; profileUrl: string; commitSha?: string } | null = null;
     try {
       const plan = buildPlanPayload('reset');
-      const res = await deployPlanViaActions(connection, plan, appendLog);
-      setResultLinks(res);
-      onDeploySuccess?.('Permintaan reset repo telah dikirim ke GitHub Actions!');
+      deployRes = await deployPlanViaActions(connection, plan, appendLog);
+      setResultLinks(deployRes);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Gagal reset repository.');
     } finally {
       setIsBusy(false);
     }
+    if (deployRes) {
+      void startWorkflowTracking('reset', deployRes);
+    }
   };
 
   const handleRunDirectCommits = async () => {
     if (!validateReady(true)) return;
+    pollAbortRef.current?.abort();
     setIsBusy(true);
     setErrorMsg(null);
     setResultLinks(null);
+    setMissionBanner(null);
     setLogs([]);
     setProgress({ done: 0, total: summary.totalCommits, date: '' });
     const controller = new AbortController();
@@ -266,7 +457,17 @@ export function MissionDeployPanel({
         controller.signal,
       );
       setResultLinks({ profileUrl: res.profileUrl });
-      onDeploySuccess?.(`${res.totalCreated} commit langsung berhasil di-push ke GitHub!`);
+      const title = `${res.totalCreated.toLocaleString()} Commit Berhasil Di-Push!`;
+      const detail = `Semua commit langsung sudah masuk ke ${connection.owner}/${connection.repo}.`;
+      setMissionBanner({
+        status: 'success',
+        mode: 'direct',
+        title,
+        detail,
+        profileUrl: res.profileUrl,
+      });
+      onDeploySuccess?.(`✅ ${title}`, 'success');
+      sendDesktopNotification(`🌸 ${title}`, detail, res.profileUrl);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Gagal membuat commit dari browser.');
     } finally {
@@ -800,6 +1001,89 @@ export function MissionDeployPanel({
         </div>
       )}
 
+      {/* Live Mission Status & Completion Notification Banner */}
+      {missionBanner && (
+        <div
+          role="status"
+          aria-live="polite"
+          className={`rounded-xl border p-3.5 text-xs transition-all ${
+            missionBanner.status === 'success'
+              ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+              : missionBanner.status === 'failure'
+                ? 'border-rose-500/50 bg-rose-500/10 text-rose-600 dark:text-rose-300'
+                : 'border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300'
+          }`}
+        >
+          <div className="flex flex-wrap items-start justify-between gap-2.5">
+            <div className="flex items-start gap-2.5">
+              {missionBanner.status === 'tracking' ? (
+                <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin" />
+              ) : missionBanner.status === 'success' ? (
+                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
+              ) : (
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              )}
+
+              <div className="space-y-1">
+                <div className="font-bold">
+                  {missionBanner.status === 'tracking'
+                    ? missionBanner.runStatus === 'in_progress'
+                      ? `⚙️ GitHub Actions sedang berjalan${missionBanner.runNumber ? ` (#${missionBanner.runNumber})` : ''}...`
+                      : `⏳ Menunggu GitHub Actions${missionBanner.runNumber ? ` (#${missionBanner.runNumber})` : ''}...`
+                    : missionBanner.title}
+                </div>
+                <p className="text-[11px] leading-relaxed opacity-90">
+                  {missionBanner.status === 'tracking'
+                    ? 'Halaman ini memantau status workflow secara otomatis sampai selesai. Jangan tutup tab dulu jika ingin melihat notifikasi berhasil di sini.'
+                    : missionBanner.detail}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {missionBanner.status === 'tracking' && notifPerm === 'default' && (
+                <button
+                  type="button"
+                  onClick={requestDesktopNotifications}
+                  className="inline-flex items-center gap-1 rounded-lg border border-sky-500/40 bg-sky-500/15 px-2.5 py-1 text-[11px] font-bold hover:bg-sky-500/25"
+                >
+                  <Bell className="h-3 w-3" />
+                  Aktifkan Notif Browser
+                </button>
+              )}
+              {missionBanner.status === 'tracking' && notifPerm === 'granted' && (
+                <span className="inline-flex items-center gap-1 rounded-lg border border-sky-500/30 px-2 py-1 text-[11px] font-semibold">
+                  <Bell className="h-3 w-3" />
+                  Notif Aktif
+                </span>
+              )}
+              {missionBanner.runUrl && (
+                <a
+                  href={missionBanner.runUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 rounded-lg border border-current/25 px-2.5 py-1 text-[11px] font-bold hover:underline"
+                >
+                  Lihat Workflow
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              )}
+              {missionBanner.status === 'success' && missionBanner.profileUrl && (
+                <a
+                  href={missionBanner.profileUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2.5 py-1 text-[11px] font-bold text-white hover:bg-emerald-500"
+                >
+                  Cek Profil GitHub
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Compact Execution Log Terminal */}
       {(logs.length > 0 || resultLinks) && (
         <div className="overflow-hidden rounded-xl border border-slate-800 bg-[#0B101B] text-slate-200">
@@ -811,6 +1095,16 @@ export function MissionDeployPanel({
 
             {resultLinks && (
               <div className="flex flex-wrap gap-2">
+                {notifPerm === 'default' && (
+                  <button
+                    type="button"
+                    onClick={requestDesktopNotifications}
+                    className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1 text-xs font-bold text-slate-100 hover:bg-slate-700"
+                  >
+                    <Bell className="h-3 w-3 text-amber-400" />
+                    Notif Browser
+                  </button>
+                )}
                 {resultLinks.actionsUrl && (
                   <a
                     href={resultLinks.actionsUrl}

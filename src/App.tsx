@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  AlertTriangle,
   BookOpen,
   Check,
+  CheckCircle2,
   Download,
   Flame,
   Flower2,
@@ -11,6 +13,7 @@ import {
   Rocket,
   Share2,
   Smartphone,
+  X,
 } from 'lucide-react';
 import { ContributionCanvas } from './components/ContributionCanvas';
 import { DensityPanel } from './components/DensityPanel';
@@ -165,9 +168,16 @@ export function App() {
   );
   const [iosInstallHint, setIosInstallHint] = useState(false);
   const [shareCopied, setShareCopied] = useState(false);
+  const [toast, setToast] = useState<{ msg: string; variant: 'info' | 'success' | 'error' } | null>(null);
   const [reactionText, setReactionText] = useState(
     'Kanvas Full Year siap dibidik! Atur Auto-Fill 15%–100% atau lukis manual di kotak kontribusi.',
   );
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToast(null), toast.variant === 'info' ? 5000 : 9000);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
 
   const pwa = usePwaInstall();
   const theme = THEME_CONFIGS[themeId];
@@ -589,7 +599,10 @@ export function App() {
               onClearToken={handleClearToken}
               summary={summary}
               dailyShift={dailyShift}
-              onDeploySuccess={(msg) => setReactionText(`🎯 ${msg}`)}
+              onDeploySuccess={(msg, variant = 'success') => {
+                setReactionText(`🎯 ${msg}`);
+                setToast({ msg, variant });
+              }}
             />
           </div>
         )}
@@ -742,6 +755,39 @@ export function App() {
         onApplyTheme={setThemeId}
         theme={theme}
       />
+
+      {toast && (
+        <div
+          role="status"
+          aria-live="polite"
+          className={`fixed right-4 top-20 z-50 flex max-w-sm items-start gap-2.5 rounded-2xl border px-4 py-3 text-xs shadow-xl backdrop-blur-md transition-all ${
+            toast.variant === 'success'
+              ? 'border-emerald-500/60 bg-emerald-950/90 text-emerald-100'
+              : toast.variant === 'error'
+                ? 'border-rose-500/60 bg-rose-950/90 text-rose-100'
+                : 'border-sky-500/50 bg-slate-900/95 text-slate-100'
+          }`}
+        >
+          {toast.variant === 'error' ? (
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-400" />
+          ) : (
+            <CheckCircle2
+              className={`mt-0.5 h-4 w-4 shrink-0 ${
+                toast.variant === 'success' ? 'text-emerald-400' : 'text-sky-400'
+              }`}
+            />
+          )}
+          <span className="flex-1 font-medium leading-relaxed">{toast.msg}</span>
+          <button
+            type="button"
+            onClick={() => setToast(null)}
+            aria-label="Tutup notifikasi"
+            className="rounded-lg p-0.5 opacity-75 hover:opacity-100"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* Mobile PWA Bottom Navigation Bar */}
       <nav
