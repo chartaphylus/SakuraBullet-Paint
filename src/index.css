@@ -1,0 +1,85 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    margin: 0;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  code, pre, .font-mono {
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+  }
+
+  .font-display {
+    font-family: 'Space Grotesk', 'Plus Jakarta Sans', sans-serif;
+  }
+}
+
+/* Custom crisp pixel grid scrollbars */
+.canvas-scroll::-webkit-scrollbar {
+  height: 8px;
+}
+
+.canvas-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.canvas-scroll::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.35);
+  border-radius: 9999px;
+}
+
+/* Subtle tactical dot matrix */
+.bg-tactical-dots-light {
+  background-image: radial-gradient(rgba(190, 18, 60, 0.11) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+.bg-tactical-dots-dark {
+  background-image: radial-gradient(rgba(56, 189, 248, 0.14) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+/* Gentle floating spider-lily / sakura petals */
+@keyframes lycoris-float {
+  0% {
+    transform: translateY(-6px) rotate(0deg);
+    opacity: 0.35;
+  }
+  50% {
+    transform: translateY(10px) rotate(12deg);
+    opacity: 0.75;
+  }
+  100% {
+    transform: translateY(-6px) rotate(0deg);
+    opacity: 0.35;
+  }
+}
+
+.animate-lycoris-float {
+  animation: lycoris-float 6s ease-in-out infinite;
+}
+
+.animate-lycoris-float-slow {
+  animation: lycoris-float 8.5s ease-in-out infinite;
+}
+
+/* Barcode motif inspired by agent dossier sheets */
+.da-barcode {
+  background-image: repeating-linear-gradient(
+    90deg,
+    currentColor 0px,
+    currentColor 2px,
+    transparent 2px,
+    transparent 4px,
+    currentColor 4px,
+    currentColor 5px,
+    transparent 5px,
+    transparent 8px,
+    currentColor 8px,
+    currentColor 11px,
+    transparent 11px,
+    transparent 13px
+  );
+}

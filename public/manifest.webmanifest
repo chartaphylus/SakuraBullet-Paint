@@ -1,0 +1,27 @@
+{
+  "name": "Sakura Bullet Paint — Lycoris Recoil Studio",
+  "short_name": "Sakura Paint",
+  "description": "Lukis grafik kontribusi GitHub (53x7) & auto-commit bertema Lycoris Recoil tanpa database.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#FFF6F4",
+  "theme_color": "#E11D48",
+  "categories": ["developer", "productivity", "utilities"],
+  "icons": [
+    {
+      "src": "./icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
+
