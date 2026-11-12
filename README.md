@@ -61,13 +61,10 @@ npm run preview
 
 ## ☁️ Deploy ke Vercel / Static Hosting
 
-Project ini merupakan aplikasi frontend statis murni tanpa environment variable atau serverless function yang wajib diatur:
+Project ini merupakan aplikasi frontend statis murni tanpa environment variable atau serverless function yang wajib diatur. Konfigurasi di [vercel.json](./vercel.json) sudah mengatur `framework: "vite"`, `buildCommand: "npm run build"`, `outputDirectory: "dist"`, SPA `rewrites`, dan HTTP security headers secara otomatis:
 
-1. Push repository ini ke GitHub (atau upload folder project ke Vercel).
-2. Di Vercel, pilih konfigurasi berikut:
-   - **Framework Preset:** `Vite`
-   - **Build Command:** `npm run build`
-   - **Output Directory:** `dist`
+1. Push repository ini ke GitHub, lalu hubungkan ke Vercel.
+2. Pastikan di Vercel **Settings → Build and Deployment** tidak ada *Override* yang salah (Framework Preset `Vite`, Output Directory `dist`).
 3. Klik **Deploy**.
 
 ---
@@ -103,28 +100,53 @@ Project ini merupakan aplikasi frontend statis murni tanpa environment variable 
 ```text
 sakura-bullet-paint/
 ├── .github/workflows/
-│   └── sakura-bullet-paint.yml   # Workflow runner untuk repo kanvas mandiri
-├── image/                        # Aset ilustrasi tema Lycoris Recoil
+│   └── sakura-bullet-paint.yml   # Template workflow runner untuk repo kanvas mandiri
+├── image/                        # 5 aset ilustrasi tema Lycoris Recoil
 ├── public/
 │   ├── icons/                    # Ikon PWA (192x192, 512x512, apple-touch-icon)
-│   ├── manifest.webmanifest      # Konfigurasi PWA
+│   ├── manifest.webmanifest      # Manifest konfigurasi PWA
 │   └── sw.js                     # Service Worker offline cache
 ├── scripts/
 │   └── execute-mission.mjs       # Eksekutor git fast-import untuk GitHub Actions
 ├── src/
-│   ├── components/               # UI Kanvas, Density, Hero, Galeri, Deploy & Help
-│   ├── data/                     # Konfigurasi karakter & 3 tema warna
-│   ├── hooks/                    # Hook instalasi PWA
-│   ├── lib/                      # Grid kalender, GitHub API, generator script & source guard
-│   ├── types/                    # Definisi tipe TypeScript
-│   ├── App.tsx
-│   └── index.css
-├── index.html
-├── package.json
-├── vercel.json                   # Security headers (CSP, X-Frame-Options, Referrer-Policy)
-├── vite.config.ts                # Konfigurasi build statis tanpa sourcemap
-├── LICENSE
-└── README.md
+│   ├── components/
+│   │   ├── ContributionCanvas.tsx  # Kanvas 53×7, Full Year 15%–100%, kuas & preview
+│   │   ├── DensityPanel.tsx        # Kalibrasi kepadatan commit & jadwal Café Shift
+│   │   ├── GalleryModal.tsx        # Modal galeri interaktif seluruh artwork
+│   │   ├── HelpPage.tsx            # Halaman About, panduan ID/EN & disclaimer
+│   │   ├── HeroShowcase.tsx        # Hero & selector tema karakter mobile/desktop
+│   │   └── MissionDeployPanel.tsx  # Eksekusi Actions, Browser API & Export .ps1/.sh
+│   ├── data/
+│   │   ├── characters.ts           # Daftar media galeri & focal point karakter
+│   │   ├── pixelTemplates.ts       # Utilitas dimensi & kloning matriks 53×7
+│   │   └── themes.ts               # Konfigurasi 3 tema warna, pesan commit & preset
+│   ├── hooks/
+│   │   └── usePwaInstall.ts        # Hook deteksi & prompt instalasi PWA
+│   ├── lib/
+│   │   ├── __tests__/
+│   │   │   └── paintCore.test.ts   # Unit test grid, hash URL, sanitasi & guard
+│   │   ├── calendarGrid.ts         # Perhitungan kalender, sanitasi state & share hash
+│   │   ├── githubApi.ts            # Klien GitHub REST & Git Data API + validasi input
+│   │   ├── repoTemplateFiles.ts    # Template runner, workflow & README repo target
+│   │   ├── scriptGenerator.ts      # Generator script offline Bash (.sh) & PowerShell (.ps1)
+│   │   └── sourceGuard.ts          # Proteksi View Source, klik kanan & frame-busting
+│   ├── types/
+│   │   └── paint.ts                # Definisi tipe TypeScript aplikasi
+│   ├── App.tsx                     # Root studio, state draft/sesi, header & footer
+│   ├── index.css                   # Entrypoint Tailwind CSS v4 & utility animasi
+│   ├── main.tsx                    # Bootstrap React & registrasi Service Worker
+│   └── vite-env.d.ts               # Tipe environment Vite
+├── .gitignore
+├── index.html                      # Entrypoint HTML, metadata PWA & no-referrer
+├── LICENSE                         # Lisensi MIT
+├── package.json                    # Dependencies, scripts & allowScripts (esbuild)
+├── package-lock.json
+├── README.md
+├── tsconfig.json
+├── tsconfig.app.json
+├── tsconfig.node.json
+├── vercel.json                     # Vite build/dist config, SPA rewrites & security headers
+└── vite.config.ts                  # Konfigurasi Vite (base '/', minify & sourcemap: false)
 ```
 
 ---
